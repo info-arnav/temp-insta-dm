@@ -25,7 +25,7 @@ export async function GET(req) {
 // RECEIVE MESSAGE
 export async function POST(req) {
   const body = await req.json();
-
+  console.log("Webhook received:", JSON.stringify(body, null, 2));
   try {
     const entry = body.entry?.[0];
     const msg = entry?.messaging?.[0];
