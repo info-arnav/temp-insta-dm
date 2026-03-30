@@ -1,13 +1,9 @@
 import { NextResponse } from "next/server";
 import { GoogleGenAI } from "@google/genai";
+import { put } from "@vercel/blob";
 
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN;
 const PAGE_ACCESS_TOKEN = process.env.PAGE_ACCESS_TOKEN;
-const BASE_URL = process.env.BASE_URL;
-
-// shared memory (POC only)
-const tempStore = global.tempStore || new Map();
-global.tempStore = tempStore;
 
 const ai = new GoogleGenAI({
   apiKey: process.env.GEMINI_API_KEY,
@@ -29,10 +25,10 @@ export async function GET(req) {
 
 // RECEIVE MESSAGE
 export async function POST(req) {
-  const body = await req.json();
-  console.log("Webhook received:", JSON.stringify(body, null, 2));
-
   try {
+    const body = await req.json();
+    console.log("Webhook received:", JSON.stringify(body, null, 2));
+
     const entry = body.entry?.[0];
     const msg = entry?.messaging?.[0];
 
@@ -40,7 +36,7 @@ export async function POST(req) {
 
     const senderId = msg.sender.id;
 
-    // 🧠 IMAGE HANDLING
+    // 🧠 HANDLE IMAGE
     const attachments = msg.message?.attachments;
 
     if (attachments?.[0]?.type === "image") {
@@ -51,7 +47,7 @@ export async function POST(req) {
       const arrayBuffer = await imgRes.arrayBuffer();
       const base64 = Buffer.from(arrayBuffer).toString("base64");
 
-      // GEMINI EDIT
+      // 🔥 GEMINI EDIT
       const response = await ai.models.generateContent({
         model: "gemini-2.5-flash-image",
         contents: [
@@ -87,16 +83,18 @@ export async function POST(req) {
         return NextResponse.json({ ok: true });
       }
 
-      // 🔥 STORE IN MEMORY
-      const id = Date.now().toString();
-      tempStore.set(id, outputBuffer);
+      // 🔥 STORE IN VERCEL BLOB (REAL FIX)
+      const filename = `img-${Date.now()}.jpg`;
 
-      // auto cleanup
-      setTimeout(() => tempStore.delete(id), 2 * 60 * 1000);
+      const blob = await put(filename, outputBuffer, {
+        access: "public",
+      });
 
-      const publicUrl = `https://temp-insta-dm.vercel.app/api/instagram/webhook/api/image/${id}`;
+      const publicUrl = blob.url;
+
       console.log("Generated image URL:", publicUrl);
-      // 🔥 SEND IMAGE BACK
+
+      // 🔥 SEND IMAGE BACK TO INSTAGRAM
       await fetch(
         `https://graph.facebook.com/v19.0/me/messages?access_token=${PAGE_ACCESS_TOKEN}`,
         {
