@@ -95,7 +95,7 @@ export async function POST(req) {
       setTimeout(() => tempStore.delete(id), 2 * 60 * 1000);
 
       const publicUrl = `https://temp-insta-dm.vercel.app/api/instagram/webhook/api/image/${id}`;
-
+      console.log("Generated image URL:", publicUrl);
       // 🔥 SEND IMAGE BACK
       await fetch(
         `https://graph.facebook.com/v19.0/me/messages?access_token=${PAGE_ACCESS_TOKEN}`,
