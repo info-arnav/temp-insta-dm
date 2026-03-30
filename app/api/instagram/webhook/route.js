@@ -82,36 +82,44 @@ export async function POST(req) {
         return NextResponse.json({ ok: true });
       }
 
-      // ⚡ TEMP upload (quick)
       const upload = await fetch("https://file.io", {
         method: "POST",
         body: new Blob([outputBuffer]),
       });
 
-      const uploadJson = await upload.json();
-      const publicUrl = uploadJson.link;
+      const text = await upload.text();
 
-      // send image back
-      await fetch(
-        `https://graph.facebook.com/v19.0/me/messages?access_token=${PAGE_ACCESS_TOKEN}`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            recipient: { id: senderId },
-            message: {
-              attachment: {
-                type: "image",
-                payload: {
-                  url: publicUrl,
-                },
+      let publicUrl = null;
+
+      try {
+        const json = JSON.parse(text);
+        publicUrl = json.link;
+      } catch (err) {
+        console.error("file.io failed, raw response:", text);
+
+        // fallback: just reply text instead of breaking
+        await fetch(
+          `https://graph.facebook.com/v19.0/me/messages?access_token=${PAGE_ACCESS_TOKEN}`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              recipient: { id: senderId },
+              message: {
+                text: "Image processing failed. Try again.",
               },
-            },
-          }),
-        },
-      );
+            }),
+          },
+        );
 
-      return NextResponse.json({ ok: true });
+        return NextResponse.json({ ok: true });
+      }
+
+      if (!publicUrl) {
+        console.error("No URL returned from upload");
+
+        return NextResponse.json({ ok: true });
+      }
     }
 
     // 🧠 2. FALLBACK → TEXT (your original flow)
