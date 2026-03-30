@@ -12,7 +12,7 @@ export async function GET(req, { params }) {
 
   return new NextResponse(buffer, {
     headers: {
-      "Content-Type": "image/jpeg",
+      "Content-Type": "image/png",
     },
   });
 }
