@@ -3,6 +3,11 @@ import { GoogleGenAI } from "@google/genai";
 
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN;
 const PAGE_ACCESS_TOKEN = process.env.PAGE_ACCESS_TOKEN;
+const BASE_URL = process.env.BASE_URL;
+
+// shared memory (POC only)
+const tempStore = global.tempStore || new Map();
+global.tempStore = tempStore;
 
 const ai = new GoogleGenAI({
   apiKey: process.env.GEMINI_API_KEY,
@@ -35,7 +40,7 @@ export async function POST(req) {
 
     const senderId = msg.sender.id;
 
-    // 🧠 1. HANDLE IMAGE FIRST
+    // 🧠 IMAGE HANDLING
     const attachments = msg.message?.attachments;
 
     if (attachments?.[0]?.type === "image") {
@@ -46,7 +51,7 @@ export async function POST(req) {
       const arrayBuffer = await imgRes.arrayBuffer();
       const base64 = Buffer.from(arrayBuffer).toString("base64");
 
-      // 🔥 GEMINI IMAGE EDIT
+      // GEMINI EDIT
       const response = await ai.models.generateContent({
         model: "gemini-2.5-flash-image",
         contents: [
@@ -82,56 +87,46 @@ export async function POST(req) {
         return NextResponse.json({ ok: true });
       }
 
-      const upload = await fetch("https://file.io", {
-        method: "POST",
-        body: new Blob([outputBuffer]),
-      });
+      // 🔥 STORE IN MEMORY
+      const id = Date.now().toString();
+      tempStore.set(id, outputBuffer);
 
-      const text = await upload.text();
+      // auto cleanup
+      setTimeout(() => tempStore.delete(id), 2 * 60 * 1000);
 
-      let publicUrl = null;
+      const publicUrl = `https://temp-insta-dm.vercel.app/api/instagram/webhook/api/image/${id}`;
 
-      try {
-        const json = JSON.parse(text);
-        publicUrl = json.link;
-      } catch (err) {
-        console.error("file.io failed, raw response:", text);
-
-        // fallback: just reply text instead of breaking
-        await fetch(
-          `https://graph.facebook.com/v19.0/me/messages?access_token=${PAGE_ACCESS_TOKEN}`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              recipient: { id: senderId },
-              message: {
-                text: "Image processing failed. Try again.",
+      // 🔥 SEND IMAGE BACK
+      await fetch(
+        `https://graph.facebook.com/v19.0/me/messages?access_token=${PAGE_ACCESS_TOKEN}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            recipient: { id: senderId },
+            message: {
+              attachment: {
+                type: "image",
+                payload: {
+                  url: publicUrl,
+                },
               },
-            }),
-          },
-        );
+            },
+          }),
+        },
+      );
 
-        return NextResponse.json({ ok: true });
-      }
-
-      if (!publicUrl) {
-        console.error("No URL returned from upload");
-
-        return NextResponse.json({ ok: true });
-      }
+      return NextResponse.json({ ok: true });
     }
 
-    // 🧠 2. FALLBACK → TEXT (your original flow)
+    // 🧠 TEXT FALLBACK
     const text = msg.message?.text;
 
     if (!text) return NextResponse.json({ ok: true });
 
     const aiRes = await ai.models.generateContent({
       model: "gemini-3.1-flash-lite-preview",
-      contents: `You are a helpful assistant replying to Instagram DMs.
-User: ${text}
-Reply short, human, helpful.`,
+      contents: `Reply short, human: ${text}`,
     });
 
     const reply = aiRes.text || "ok";
