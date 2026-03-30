@@ -26,18 +26,99 @@ export async function GET(req) {
 export async function POST(req) {
   const body = await req.json();
   console.log("Webhook received:", JSON.stringify(body, null, 2));
+
   try {
     const entry = body.entry?.[0];
     const msg = entry?.messaging?.[0];
 
-    if (!msg?.message?.text) {
+    if (!msg) return NextResponse.json({ ok: true });
+
+    const senderId = msg.sender.id;
+
+    // 🧠 1. HANDLE IMAGE FIRST
+    const attachments = msg.message?.attachments;
+
+    if (attachments?.[0]?.type === "image") {
+      const imageUrl = attachments[0].payload.url;
+
+      // download image
+      const imgRes = await fetch(imageUrl);
+      const arrayBuffer = await imgRes.arrayBuffer();
+      const base64 = Buffer.from(arrayBuffer).toString("base64");
+
+      // 🔥 GEMINI IMAGE EDIT
+      const response = await ai.models.generateContent({
+        model: "gemini-2.5-flash-image",
+        contents: [
+          {
+            role: "user",
+            parts: [
+              {
+                inlineData: {
+                  data: base64,
+                  mimeType: "image/jpeg",
+                },
+              },
+              {
+                text: "Apply a bright happy mood filter. Warm tones, vibrant colors, soft glow.",
+              },
+            ],
+          },
+        ],
+      });
+
+      const parts = response.candidates?.[0]?.content?.parts || [];
+
+      let outputBuffer = null;
+
+      for (const part of parts) {
+        if (part.inlineData?.data) {
+          outputBuffer = Buffer.from(part.inlineData.data, "base64");
+        }
+      }
+
+      if (!outputBuffer) {
+        console.log("No image returned from Gemini");
+        return NextResponse.json({ ok: true });
+      }
+
+      // ⚡ TEMP upload (quick)
+      const upload = await fetch("https://file.io", {
+        method: "POST",
+        body: new Blob([outputBuffer]),
+      });
+
+      const uploadJson = await upload.json();
+      const publicUrl = uploadJson.link;
+
+      // send image back
+      await fetch(
+        `https://graph.facebook.com/v19.0/me/messages?access_token=${PAGE_ACCESS_TOKEN}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            recipient: { id: senderId },
+            message: {
+              attachment: {
+                type: "image",
+                payload: {
+                  url: publicUrl,
+                },
+              },
+            },
+          }),
+        },
+      );
+
       return NextResponse.json({ ok: true });
     }
 
-    const senderId = msg.sender.id;
-    const text = msg.message.text;
+    // 🧠 2. FALLBACK → TEXT (your original flow)
+    const text = msg.message?.text;
 
-    // 🔥 GEMINI CALL (your working setup)
+    if (!text) return NextResponse.json({ ok: true });
+
     const aiRes = await ai.models.generateContent({
       model: "gemini-3.1-flash-lite-preview",
       contents: `You are a helpful assistant replying to Instagram DMs.
@@ -47,18 +128,17 @@ Reply short, human, helpful.`,
 
     const reply = aiRes.text || "ok";
 
-    // 🔥 SEND BACK TO INSTAGRAM
-    await fetch("https://graph.facebook.com/v18.0/me/messages", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${PAGE_ACCESS_TOKEN}`,
-        "Content-Type": "application/json",
+    await fetch(
+      `https://graph.facebook.com/v19.0/me/messages?access_token=${PAGE_ACCESS_TOKEN}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          recipient: { id: senderId },
+          message: { text: reply },
+        }),
       },
-      body: JSON.stringify({
-        recipient: { id: senderId },
-        message: { text: reply },
-      }),
-    });
+    );
   } catch (e) {
     console.error("Webhook error:", e);
   }
